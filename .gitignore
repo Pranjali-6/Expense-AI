@@ -46,4 +46,3 @@ Thumbs.db
 .idea/
 .vscode/*
 !.vscode/extensions.json
-build-a-production-grade-multi-tenant-smooth-wand.md
