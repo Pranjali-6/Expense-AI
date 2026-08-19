@@ -18,6 +18,10 @@ class UploadFileResult(BaseModel):
     page_count: int = 0
     error_code: str | None = None
     message: str | None = None
+    #: Stored, but password protected. Neither accepted nor rejected: the file
+    #: is safe on disk and `statement_id` identifies it, so the client prompts
+    #: for a password rather than asking for the file again.
+    locked: bool = False
 
 
 class UploadResponse(BaseModel):
@@ -28,6 +32,33 @@ class UploadResponse(BaseModel):
     accepted: int
     rejected: int
     results: list[UploadFileResult]
+
+    @property
+    def locked(self) -> int:
+        return sum(1 for result in self.results if result.locked)
+
+
+class UnlockRequest(BaseModel):
+    """One statement's password.
+
+    The bound is a sanity check on input size, not a password policy — the
+    value is a bank's, not ours. It is never stored, never logged and never
+    echoed back in an error.
+    """
+
+    password: str = Field(min_length=1, max_length=128)
+
+
+class UnlockResponse(BaseModel):
+    unlocked: bool
+    statement_id: uuid.UUID
+    job_id: uuid.UUID | None = None
+    page_count: int = 0
+    #: Shown so a user with a formulaic bank password knows how much room is
+    #: left before the statement stops answering.
+    attempts_remaining: int = 0
+    error_code: str | None = None
+    message: str | None = None
 
 
 class StatementSummary(BaseModel):

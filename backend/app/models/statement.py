@@ -93,6 +93,15 @@ class Statement(Base, TenantScopedMixin, TimestampMixin):
     # Machine-readable only. Never a raw exception message: those carry values.
     error_code: Mapped[str | None] = mapped_column(String(64))
 
+    # Failed password attempts against a `password_required` statement.
+    #
+    # Persisted rather than held in Redis because it is a security control, and
+    # a cache flush must not hand an attacker a fresh budget. Indian bank
+    # statement passwords follow published per-bank formulas over PAN, date of
+    # birth and account digits, so an uncapped unlock endpoint is a practical
+    # oracle against exactly the identifiers this system exists to protect.
+    unlock_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

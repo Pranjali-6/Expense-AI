@@ -7,6 +7,7 @@ import {
   FileText,
   FileUp,
   Loader2,
+  Lock,
   ShieldAlert,
   X,
 } from "lucide-react";
@@ -14,6 +15,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { ApiError, statements, streamJobEvents, type JobEvent, type UploadFileResult } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -64,6 +66,54 @@ export function UploadDropzone() {
     setError(pdfs.length < (incoming?.length ?? 0) ? "Only PDF files can be uploaded." : null);
   }
 
+  /** Attach an SSE stream to one job and fold its events into `tracked`. */
+  const watch = React.useCallback((jobId: string) => {
+    const abort = streamJobEvents(
+      jobId,
+      (event) =>
+        setTracked((current) =>
+          current.map((entry) =>
+            entry.result.job_id === jobId ? { ...entry, latest: event } : entry,
+          ),
+        ),
+      () =>
+        setTracked((current) =>
+          current.map((entry) =>
+            entry.result.job_id === jobId ? { ...entry, finished: true } : entry,
+          ),
+        ),
+    );
+    cleanups.current.push(abort);
+  }, []);
+
+  /** A parked statement just opened: it now has a job, so track it like any
+   *  other upload rather than making the user find the file again. */
+  const onUnlocked = React.useCallback(
+    (statementId: string, jobId: string, pageCount: number) => {
+      setTracked((current) =>
+        current.map((entry) =>
+          entry.result.statement_id === statementId
+            ? {
+                ...entry,
+                finished: false,
+                result: {
+                  ...entry.result,
+                  accepted: true,
+                  locked: false,
+                  job_id: jobId,
+                  page_count: pageCount,
+                  error_code: null,
+                  message: null,
+                },
+              }
+            : entry,
+        ),
+      );
+      watch(jobId);
+    },
+    [watch],
+  );
+
   async function submit() {
     if (!pending.length) return;
     setUploading(true);
@@ -73,31 +123,15 @@ export function UploadDropzone() {
       const response = await statements.upload(pending);
       const next: Tracked[] = response.results.map((result) => ({
         result,
-        finished: !result.accepted,
+        // A locked file is not finished — it is waiting on the user, and its
+        // row stays open with a password prompt in it.
+        finished: !result.accepted && !result.locked,
       }));
       setTracked((current) => [...next, ...current]);
       setPending([]);
 
       for (const item of next) {
-        if (!item.result.job_id) continue;
-        const jobId = item.result.job_id;
-
-        const abort = streamJobEvents(
-          jobId,
-          (event) =>
-            setTracked((current) =>
-              current.map((entry) =>
-                entry.result.job_id === jobId ? { ...entry, latest: event } : entry,
-              ),
-            ),
-          () =>
-            setTracked((current) =>
-              current.map((entry) =>
-                entry.result.job_id === jobId ? { ...entry, finished: true } : entry,
-              ),
-            ),
-        );
-        cleanups.current.push(abort);
+        if (item.result.job_id) watch(item.result.job_id);
       }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Upload failed. Please try again.");
@@ -210,7 +244,11 @@ export function UploadDropzone() {
         <section aria-label="Processing" className="space-y-3">
           <h2 className="text-sm font-semibold">Processing</h2>
           {tracked.map((entry) => (
-            <ProgressRow key={entry.result.filename + (entry.result.job_id ?? "")} entry={entry} />
+            <ProgressRow
+              key={entry.result.filename + (entry.result.statement_id ?? "")}
+              entry={entry}
+              onUnlocked={onUnlocked}
+            />
           ))}
         </section>
       )}
@@ -218,8 +256,21 @@ export function UploadDropzone() {
   );
 }
 
-function ProgressRow({ entry }: { entry: Tracked }) {
+function ProgressRow({
+  entry,
+  onUnlocked,
+}: {
+  entry: Tracked;
+  onUnlocked: (statementId: string, jobId: string, pageCount: number) => void;
+}) {
   const { result, latest, finished } = entry;
+
+  // Password protected, and already stored. Prompting here is the whole point:
+  // the file is safe on the server, so unlocking it must not mean finding and
+  // uploading it a second time.
+  if (result.locked && result.statement_id) {
+    return <LockedRow result={result} onUnlocked={onUnlocked} />;
+  }
 
   // A rejected file never had a job; it shows why it was refused instead of a
   // progress bar that would never move.
@@ -278,6 +329,108 @@ function ProgressRow({ entry }: { entry: Tracked }) {
 
         <p className="mt-2 text-xs text-muted">
           {latest?.message ?? STAGE_LABELS[stage] ?? stage}
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+
+/** One password-protected statement, waiting on its password.
+
+ *  Per file, because a single field on the upload form cannot serve twelve
+ *  statements from four banks. */
+function LockedRow({
+  result,
+  onUnlocked,
+}: {
+  result: UploadFileResult;
+  onUnlocked: (statementId: string, jobId: string, pageCount: number) => void;
+}) {
+  const [password, setPassword] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const [message, setMessage] = React.useState<string | null>(null);
+  const [remaining, setRemaining] = React.useState<number | null>(null);
+  const statementId = result.statement_id!;
+
+  async function attempt(event: React.FormEvent) {
+    event.preventDefault();
+    if (!password || busy) return;
+
+    setBusy(true);
+    setMessage(null);
+    try {
+      const response = await statements.unlock(statementId, password);
+      if (response.unlocked && response.job_id) {
+        onUnlocked(statementId, response.job_id, response.page_count);
+        return;
+      }
+      setMessage(response.message ?? "That password did not open the statement.");
+      setRemaining(response.attempts_remaining);
+    } catch (err) {
+      setMessage(
+        err instanceof ApiError ? err.message : "Could not unlock the statement.",
+      );
+    } finally {
+      // Cleared on every outcome. The value is a bank password the user did
+      // not choose, and leaving it sitting in a form field is needless
+      // exposure on a shared screen.
+      setPassword("");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardContent className="p-4">
+        <div className="flex items-start gap-3">
+          <Lock className="mt-0.5 size-4 shrink-0 text-warning-text" aria-hidden="true" />
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-medium">{result.filename}</p>
+            <p className="mt-0.5 text-sm text-muted">
+              Password protected. Your file is saved &mdash; enter its password
+              to finish importing it.
+            </p>
+          </div>
+          <Badge variant="warning">Locked</Badge>
+        </div>
+
+        <form onSubmit={attempt} className="mt-3 flex flex-wrap items-start gap-2">
+          <label className="sr-only" htmlFor={`password-${statementId}`}>
+            Password for {result.filename}
+          </label>
+          <Input
+            id={`password-${statementId}`}
+            type="password"
+            autoComplete="off"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Statement password"
+            className="min-w-0 flex-1 sm:max-w-xs"
+            disabled={busy}
+          />
+          <Button type="submit" variant="primary" disabled={busy || !password}>
+            {busy && <Loader2 className="size-4 animate-spin" />}
+            {busy ? "Opening…" : "Unlock"}
+          </Button>
+        </form>
+
+        {message && (
+          <p role="alert" className="mt-2 text-sm text-error-text">
+            {message}
+            {remaining !== null && remaining > 0 && (
+              <span className="text-muted">
+                {" "}
+                {remaining} attempt{remaining === 1 ? "" : "s"} left.
+              </span>
+            )}
+          </p>
+        )}
+
+        <p className="mt-2 text-xs text-subtle">
+          Most banks use a documented formula &mdash; often the first letters of
+          your name with your date of birth. The password is used once to open
+          the file and is never stored.
         </p>
       </CardContent>
     </Card>

@@ -275,3 +275,49 @@ def _looks_like_a_decompression_bomb(pdf: pikepdf.Pdf, stored_size: int) -> bool
         return False
 
     return declared_total > stored_size * MAX_STREAM_EXPANSION_RATIO
+
+
+class PdfPasswordError(Exception):
+    """The supplied password did not open the document.
+
+    Deliberately carries no detail. pikepdf's own exception text can quote file
+    content, and anything more specific than "wrong" turns this into an oracle.
+    """
+
+
+def unlock_pdf(data: bytes, *, password: str) -> bytes:
+    """Return `data` with its password removed.
+
+    Called once, when a user unlocks a statement they uploaded. The plaintext is
+    what gets stored, and the password is never persisted — see
+    `services.statements.unlock_statement` for why that is the safer of the two
+    options.
+
+    Removing the document password does not leave the file unprotected: object
+    storage encrypts it at rest under a per-tenant key derived from the master
+    KEK, which is a stronger guarantee than a PDF password that, for most Indian
+    banks, is a documented formula over the account holder's PAN and date of
+    birth.
+
+    Raises:
+        PdfPasswordError: the password did not open the document.
+        ValueError: the document opened but could not be rewritten.
+    """
+    try:
+        pdf = pikepdf.open(io.BytesIO(data), password=password)
+    except pikepdf.PasswordError:
+        raise PdfPasswordError from None
+    except Exception:
+        # Never surface pikepdf's message: it can quote raw file content.
+        raise ValueError("unreadable") from None
+
+    with pdf:
+        out = io.BytesIO()
+        try:
+            # No `encryption=` argument means saved without encryption. Not
+            # `pdf.save(..., encryption=False)`, which pikepdf rejects.
+            pdf.save(out)
+        except Exception:
+            raise ValueError("unwritable") from None
+
+    return out.getvalue()

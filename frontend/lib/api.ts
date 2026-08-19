@@ -306,12 +306,24 @@ export type UploadFileResult = {
   page_count: number;
   error_code: string | null;
   message: string | null;
+  /** Stored but password protected — prompt for a password, don't re-upload. */
+  locked: boolean;
 };
 
 export type UploadResponse = {
   accepted: number;
   rejected: number;
   results: UploadFileResult[];
+};
+
+export type UnlockResponse = {
+  unlocked: boolean;
+  statement_id: string;
+  job_id: string | null;
+  page_count: number;
+  attempts_remaining: number;
+  error_code: string | null;
+  message: string | null;
 };
 
 export type JobEvent = {
@@ -344,6 +356,20 @@ export const statements = {
     }
     if (!response.ok) throw await parseError(response);
     return response.json();
+  },
+
+  /**
+   * Supply the password for one protected statement.
+   *
+   * Per statement, never per batch: twelve files from four banks have four
+   * different passwords. The password is sent once and is not retained on
+   * either side — the server stores the decrypted PDF instead.
+   */
+  unlock(id: string, password: string): Promise<UnlockResponse> {
+    return apiFetch(`/statements/${id}/unlock`, {
+      method: "POST",
+      body: { password },
+    });
   },
 
   list(): Promise<StatementSummary[]> {

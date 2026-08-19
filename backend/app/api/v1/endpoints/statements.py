@@ -25,6 +25,8 @@ from app.schemas.statement import (
     StatementDetail,
     StatementHealthResponse,
     StatementSummary,
+    UnlockRequest,
+    UnlockResponse,
     UploadFileResult,
     UploadResponse,
 )
@@ -122,6 +124,7 @@ async def upload(
                 page_count=outcome.page_count,
                 error_code=outcome.error_code,
                 message=outcome.message,
+                locked=outcome.locked,
             )
         )
         if outcome.accepted and outcome.job_id and outcome.statement_id:
@@ -141,6 +144,69 @@ async def upload(
     accepted = sum(1 for result in results if result.accepted)
     return UploadResponse(
         accepted=accepted, rejected=len(results) - accepted, results=results
+    )
+
+
+@router.post(
+    "/{statement_id}/unlock",
+    response_model=UnlockResponse,
+    summary="Supply the password for a protected statement",
+)
+async def unlock(
+    statement_id: str,
+    payload: UnlockRequest,
+    request: Request,
+    background: BackgroundTasks,
+    session: TenantSession,
+    current_user: CurrentUser,
+) -> UnlockResponse:
+    """Open a statement that was uploaded password protected.
+
+    Per statement, not per batch: one upload of twelve files from four banks
+    has four different passwords, so a single field on the upload form could
+    never have worked.
+
+    Rate limited on the upload scope *and* capped per statement. The two are
+    doing different jobs — the scope limit slows one user down, the per-row cap
+    survives new sessions and cache flushes.
+    """
+    target = parse_uuid(statement_id)
+
+    limit = await check_rate_limit(RateLimitScope.UPLOAD, str(current_user.id))
+    if not limit.allowed:
+        raise RateLimitError(
+            "Too many attempts. Please wait a little.",
+            details={"retry_after_seconds": limit.retry_after_seconds},
+        )
+
+    outcome = await statement_service.unlock_statement(
+        session,
+        tenant_id=current_user.tenant_id,
+        user_id=current_user.id,
+        statement_id=target,
+        password=payload.password,
+        request_id=getattr(request.state, "request_id", None),
+        ip_address=client_ip(request),
+    )
+
+    # Queued after the session commits, for the same reason upload does: a job
+    # published against an uncommitted row is picked up by a fast worker that
+    # then finds nothing.
+    if outcome.unlocked and outcome.job_id:
+        background.add_task(
+            _queue_ingestion,
+            [(outcome.job_id, outcome.statement_id)],
+            str(current_user.tenant_id),
+        )
+
+    return UnlockResponse(
+        unlocked=outcome.unlocked,
+        statement_id=outcome.statement_id,
+        job_id=outcome.job_id,
+        page_count=outcome.page_count,
+        attempts_remaining=outcome.attempts_remaining,
+        error_code=outcome.error_code,
+        message=outcome.message,
     )
 
 

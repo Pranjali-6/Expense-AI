@@ -77,6 +77,12 @@ class StatementStatus(StrEnum):
     PROCESSED = "processed"
     FAILED = "failed"
 
+    #: Stored, but encrypted with a password we do not have. Not a failure —
+    #: the file is intact and one correct password away from processing, so it
+    #: waits for the user rather than being discarded. See
+    #: `services.statements.unlock_statement`.
+    PASSWORD_REQUIRED = "password_required"
+
 
 class TrustStatus(StrEnum):
     """Whether a statement's arithmetic holds.

@@ -1,8 +1,9 @@
 "use client";
 
+import * as React from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FileText, Stethoscope, Trash2, Upload } from "lucide-react";
+import { FileText, Loader2, Lock, Stethoscope, Trash2, Upload } from "lucide-react";
 
 import { PageHeader } from "@/components/shared/page-header";
 import { EmptyState } from "@/components/shared/empty-state";
@@ -10,13 +11,18 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { TableSkeleton } from "@/components/ui/skeleton";
-import { statements, type StatementSummary } from "@/lib/api";
+import { Input } from "@/components/ui/input";
+import { ApiError, statements, type StatementSummary } from "@/lib/api";
 import { formatDate, formatDateTime } from "@/lib/format";
 
 function trustBadge(statement: StatementSummary) {
   // Never claim more than the pipeline verified. `pending` means reconciliation
   // has not run, which is not the same as "balanced".
   if (statement.status === "failed") return { variant: "error" as const, label: "Failed" };
+  // Waiting on the user, not broken. Rendering this as a failure would tell
+  // someone their statement is unreadable when it is one password away.
+  if (statement.status === "password_required")
+    return { variant: "warning" as const, label: "Locked" };
   if (statement.trust_status === "trusted") return { variant: "success" as const, label: "Trusted" };
   if (statement.trust_status === "untrusted") return { variant: "error" as const, label: "Does not reconcile" };
   return { variant: "neutral" as const, label: "Not yet reconciled" };
@@ -47,6 +53,8 @@ export default function StatementsPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["statements"] }),
   });
 
+  const locked = data?.filter((s) => s.status === "password_required") ?? [];
+
   return (
     <>
       <PageHeader
@@ -69,6 +77,14 @@ export default function StatementsPage() {
           </>
         }
       />
+
+      {locked.length > 0 && (
+        <section aria-label="Statements needing a password" className="mb-4 space-y-3">
+          {locked.map((statement) => (
+            <UnlockCard key={statement.id} statement={statement} />
+          ))}
+        </section>
+      )}
 
       {isLoading ? (
         <Card>
@@ -178,5 +194,102 @@ export default function StatementsPage() {
         </Card>
       )}
     </>
+  );
+}
+
+
+/** A password prompt for one stored-but-locked statement.
+ *
+ *  Lives on this page as well as on Upload because the upload view is
+ *  transient: a user who navigates away mid-import would otherwise have no
+ *  route back to a file the server is already holding. */
+function UnlockCard({ statement }: { statement: StatementSummary }) {
+  const queryClient = useQueryClient();
+  const [password, setPassword] = React.useState("");
+  const [message, setMessage] = React.useState<string | null>(null);
+  const [remaining, setRemaining] = React.useState<number | null>(null);
+
+  const unlock = useMutation({
+    mutationFn: () => statements.unlock(statement.id, password),
+    onSuccess: (response) => {
+      setPassword("");
+      if (response.unlocked) {
+        setMessage(null);
+        queryClient.invalidateQueries({ queryKey: ["statements"] });
+        return;
+      }
+      setMessage(response.message ?? "That password did not open the statement.");
+      setRemaining(response.attempts_remaining);
+    },
+    onError: (err) => {
+      setPassword("");
+      setMessage(
+        err instanceof ApiError ? err.message : "Could not unlock the statement.",
+      );
+    },
+  });
+
+  return (
+    <Card>
+      <CardContent className="p-4">
+        <div className="flex items-start gap-3">
+          <Lock className="mt-0.5 size-4 shrink-0 text-warning-text" aria-hidden="true" />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium">
+              {statement.bank_name ?? statement.bank_code ?? "A statement"} needs
+              a password
+            </p>
+            <p className="mt-0.5 text-sm text-muted">
+              Uploaded {formatDateTime(statement.created_at)} &middot;{" "}
+              {sizeLabel(statement.file_size_bytes)}. The file is saved and
+              encrypted &mdash; it just cannot be read yet.
+            </p>
+          </div>
+          <Badge variant="warning">Locked</Badge>
+        </div>
+
+        <form
+          className="mt-3 flex flex-wrap items-start gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (password) unlock.mutate();
+          }}
+        >
+          <label className="sr-only" htmlFor={`unlock-${statement.id}`}>
+            Statement password
+          </label>
+          <Input
+            id={`unlock-${statement.id}`}
+            type="password"
+            autoComplete="off"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Statement password"
+            className="min-w-0 flex-1 sm:max-w-xs"
+            disabled={unlock.isPending}
+          />
+          <Button
+            type="submit"
+            variant="primary"
+            disabled={unlock.isPending || !password}
+          >
+            {unlock.isPending && <Loader2 className="size-4 animate-spin" />}
+            {unlock.isPending ? "Opening…" : "Unlock"}
+          </Button>
+        </form>
+
+        {message && (
+          <p role="alert" className="mt-2 text-sm text-error-text">
+            {message}
+            {remaining !== null && remaining > 0 && (
+              <span className="text-muted">
+                {" "}
+                {remaining} attempt{remaining === 1 ? "" : "s"} left.
+              </span>
+            )}
+          </p>
+        )}
+      </CardContent>
+    </Card>
   );
 }
