@@ -1,0 +1,458 @@
+name: expense-ai
+
+# =============================================================================
+# Expense AI — development stack
+#
+#   nginx  →  frontend (Next.js)
+#          →  api (FastAPI)
+#
+#   api / workers  →  postgres · redis · minio
+#
+# Optional profiles:
+#   --profile debug          flower
+#   --profile observability  prometheus · grafana · loki · promtail
+#   --profile security       clamav
+# =============================================================================
+
+x-backend-env: &backend-env
+  ENVIRONMENT: ${ENVIRONMENT:-development}
+  DEBUG: ${DEBUG:-true}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  LOG_FORMAT: ${LOG_FORMAT:-json}
+  SECRET_KEY: ${SECRET_KEY}
+  STORAGE_MASTER_KEK: ${STORAGE_MASTER_KEK}
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: 5432
+  POSTGRES_DB: ${POSTGRES_DB:-expense_ai}
+  POSTGRES_USER: ${POSTGRES_USER:-expense_owner}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  APP_DB_USER: ${APP_DB_USER:-expense_app}
+  APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+  REDIS_HOST: redis
+  REDIS_PORT: 6379
+  MINIO_ENDPOINT: minio:9000
+  MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio_admin}
+  MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+  MINIO_BUCKET_STATEMENTS: ${MINIO_BUCKET_STATEMENTS:-statements}
+  MINIO_BUCKET_EXPORTS: ${MINIO_BUCKET_EXPORTS:-exports}
+  AI_ENABLED: ${AI_ENABLED:-false}
+  AI_PROVIDER: ${AI_PROVIDER:-gemini}
+  AI_MODEL_CATEGORIZE: ${AI_MODEL_CATEGORIZE:-gemini-2.0-flash}
+  AI_MODEL_ASSISTANT: ${AI_MODEL_ASSISTANT:-gemini-2.0-flash}
+  GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+  GOOGLE_OAUTH_ENABLED: ${GOOGLE_OAUTH_ENABLED:-false}
+  GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+  GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+  CLAMAV_ENABLED: ${CLAMAV_ENABLED:-false}
+  OCR_ENABLED: ${OCR_ENABLED:-true}
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  # ---------------------------------------------------------------- datastores
+  postgres:
+    image: postgres:16-alpine
+    container_name: expense-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-expense_ai}
+      POSTGRES_USER: ${POSTGRES_USER:-expense_owner}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      APP_DB_USER: ${APP_DB_USER:-expense_app}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infrastructure/postgres/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-expense_owner} -d ${POSTGRES_DB:-expense_ai}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    logging: *default-logging
+
+  redis:
+    image: redis:7-alpine
+    container_name: expense-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - redisdata:/data
+    ports:
+      - "127.0.0.1:${REDIS_HOST_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    logging: *default-logging
+
+  minio:
+    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    container_name: expense-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio_admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - miniodata:/data
+    ports:
+      - "127.0.0.1:${MINIO_HOST_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_HOST_PORT:-9001}:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    logging: *default-logging
+
+  minio-init:
+    image: minio/mc:RELEASE.2024-10-08T09-37-26Z
+    container_name: expense-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio_admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET_STATEMENTS: ${MINIO_BUCKET_STATEMENTS:-statements}
+      MINIO_BUCKET_EXPORTS: ${MINIO_BUCKET_EXPORTS:-exports}
+    volumes:
+      - ./infrastructure/minio/init-buckets.sh:/init-buckets.sh:ro
+    entrypoint: ["/bin/sh", "/init-buckets.sh"]
+    restart: "no"
+    logging: *default-logging
+
+  # ------------------------------------------------------------------ backend
+  api:
+    build:
+      context: .
+      dockerfile: docker/api/Dockerfile
+      args:
+        INSTALL_TEST: "true"
+    container_name: expense-api
+    restart: unless-stopped
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: api
+    volumes:
+      - ./backend:/app/backend
+      - ./parsers:/app/parsers
+      - ./workers:/app/workers
+      - ./tests:/app/tests
+      - ./tools:/app/tools
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    expose:
+      - "8000"
+    # Convenience only — everything reaches the API through nginx on :80.
+    # Override API_HOST_PORT if 8000 is taken on your machine.
+    ports:
+      - "127.0.0.1:${API_HOST_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/v1/health/live', timeout=4).status==200 else 1)"]
+      interval: 15s
+      timeout: 6s
+      retries: 8
+      start_period: 30s
+    logging: *default-logging
+
+  # Light queue: categorization, intelligence, notifications, exports.
+  worker-default:
+    build:
+      context: .
+      dockerfile: docker/worker/Dockerfile
+      args:
+        INSTALL_TEST: "true"
+    container_name: expense-worker-default
+    restart: unless-stopped
+    command: >
+      celery -A workers.celery_app worker
+      --loglevel=INFO --queues=default,intelligence
+      --concurrency=4 --hostname=default@%h
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: worker-default
+      # Celery forks; a counter incremented in a child is invisible to the
+      # parent's registry. prometheus_client's multiprocess mode writes samples
+      # into this directory instead, and the worker's metrics server reads the
+      # whole directory. A tmpfs, because these files are scratch — they are
+      # rebuilt on every start and must never survive a restart.
+      PROMETHEUS_MULTIPROC_DIR: /run/prometheus
+    tmpfs:
+      # mode 1777 because the container runs as an unprivileged user and a
+      # tmpfs is created root-owned. Sticky, like /tmp: any user may create a
+      # file, only its owner may remove it. Without this the worker cannot
+      # write its metric samples and crash-loops on a permissions error —
+      # taking the queue down for the sake of a dashboard.
+      - /run/prometheus:mode=1777
+    volumes:
+      - ./backend:/app/backend
+      - ./parsers:/app/parsers
+      - ./workers:/app/workers
+      - ./tests:/app/tests
+      - ./tools:/app/tools
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -d default@$$HOSTNAME"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 40s
+    logging: *default-logging
+
+  # Heavy queue: PDF extraction, OCR, table parsing. CPU-bound, scale separately.
+  worker-extract:
+    build:
+      context: .
+      dockerfile: docker/worker/Dockerfile
+      args:
+        INSTALL_TEST: "true"
+    # No container_name: this is the designated scale-out service, and a fixed
+    # container name makes `replicas` (see docker-compose.prod.yml) invalid.
+    restart: unless-stopped
+    command: >
+      celery -A workers.celery_app worker
+      --loglevel=INFO --queues=extract
+      --concurrency=2 --hostname=extract@%h
+      --max-tasks-per-child=20
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: worker-extract
+      PROMETHEUS_MULTIPROC_DIR: /run/prometheus
+    tmpfs:
+      # mode 1777 because the container runs as an unprivileged user and a
+      # tmpfs is created root-owned. Sticky, like /tmp: any user may create a
+      # file, only its owner may remove it. Without this the worker cannot
+      # write its metric samples and crash-loops on a permissions error —
+      # taking the queue down for the sake of a dashboard.
+      - /run/prometheus:mode=1777
+    volumes:
+      - ./backend:/app/backend
+      - ./parsers:/app/parsers
+      - ./workers:/app/workers
+      - ./tests:/app/tests
+      - ./tools:/app/tools
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -d extract@$$HOSTNAME"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 40s
+    logging: *default-logging
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: docker/worker/Dockerfile
+    container_name: expense-scheduler
+    restart: unless-stopped
+    command: >
+      celery -A workers.celery_app beat
+      --loglevel=INFO
+      --schedule=/tmp/celerybeat-schedule
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: scheduler
+    volumes:
+      - ./backend:/app/backend
+      - ./parsers:/app/parsers
+      - ./workers:/app/workers
+      - ./tests:/app/tests
+      - ./tools:/app/tools
+    depends_on:
+      redis:
+        condition: service_healthy
+    logging: *default-logging
+
+  # ----------------------------------------------------------------- frontend
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend/Dockerfile
+      target: ${FRONTEND_TARGET:-development}
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-/api/v1}
+        NEXT_PUBLIC_APP_NAME: ${NEXT_PUBLIC_APP_NAME:-Expense AI}
+    container_name: expense-frontend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-/api/v1}
+      NEXT_PUBLIC_APP_NAME: ${NEXT_PUBLIC_APP_NAME:-Expense AI}
+      NEXT_TELEMETRY_DISABLED: "1"
+      WATCHPACK_POLLING: "true"
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+      - frontend_next:/app/.next
+    expose:
+      - "3000"
+    ports:
+      - "127.0.0.1:${FRONTEND_HOST_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/api/healthz || exit 1"]
+      interval: 15s
+      timeout: 6s
+      retries: 10
+      start_period: 60s
+    logging: *default-logging
+
+  # -------------------------------------------------------------------- proxy
+  nginx:
+    build:
+      context: .
+      dockerfile: docker/nginx/Dockerfile
+    container_name: expense-nginx
+    restart: unless-stopped
+    ports:
+      - "${HTTP_HOST_PORT:-80}:80"
+    depends_on:
+      - api
+      - frontend
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging: *default-logging
+
+  # ------------------------------------------------------- optional: debug ---
+  flower:
+    image: mher/flower:2.0
+    container_name: expense-flower
+    restart: unless-stopped
+    profiles: ["debug"]
+    command: celery flower --broker=redis://redis:6379/1 --port=5555
+    ports:
+      - "127.0.0.1:5555:5555"
+    depends_on:
+      redis:
+        condition: service_healthy
+    logging: *default-logging
+
+  # ---------------------------------------------------- optional: security ---
+  clamav:
+    image: clamav/clamav:1.4
+    container_name: expense-clamav
+    restart: unless-stopped
+    profiles: ["security"]
+    volumes:
+      - clamavdata:/var/lib/clamav
+    healthcheck:
+      test: ["CMD-SHELL", "clamdcheck.sh || exit 1"]
+      interval: 60s
+      timeout: 30s
+      retries: 5
+      start_period: 180s
+    logging: *default-logging
+
+  # ----------------------------------------------- optional: observability ---
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: expense-prometheus
+    restart: unless-stopped
+    profiles: ["observability"]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ./infrastructure/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheusdata:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    logging: *default-logging
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: expense-grafana
+    restart: unless-stopped
+    profiles: ["observability"]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafanadata:/var/lib/grafana
+      - ./infrastructure/grafana/provisioning:/etc/grafana/provisioning:ro
+      # Provisioned from files, so the one screen an operator opens during an
+      # incident is reviewable in a diff and survives losing the volume.
+      - ./infrastructure/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "127.0.0.1:3001:3000"
+    depends_on:
+      - prometheus
+    logging: *default-logging
+
+  loki:
+    image: grafana/loki:3.1.1
+    container_name: expense-loki
+    restart: unless-stopped
+    profiles: ["observability"]
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - lokidata:/loki
+    ports:
+      - "127.0.0.1:3100:3100"
+    logging: *default-logging
+
+  promtail:
+    image: grafana/promtail:3.1.1
+    container_name: expense-promtail
+    restart: unless-stopped
+    profiles: ["observability"]
+    command: -config.file=/etc/promtail/config.yml
+    volumes:
+      - ./infrastructure/loki/promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+    logging: *default-logging
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:
+  clamavdata:
+  prometheusdata:
+  grafanadata:
+  lokidata:
+  frontend_node_modules:
+  frontend_next:
+
+networks:
+  default:
+    name: expense-ai-net

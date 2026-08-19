@@ -1,0 +1,61 @@
+# Shared by API, workers and scheduler.
+
+# --- Web / validation --------------------------------------------------------
+fastapi==0.115.5
+pydantic==2.9.2
+pydantic-settings==2.6.1
+email-validator==2.2.0
+python-multipart==0.0.17
+orjson==3.10.11
+
+# --- Database ----------------------------------------------------------------
+SQLAlchemy==2.0.36
+asyncpg==0.30.0
+psycopg2-binary==2.9.10
+alembic==1.14.0
+
+# --- Cache / queue -----------------------------------------------------------
+redis==5.2.0
+celery==5.4.0
+
+# --- Object storage ----------------------------------------------------------
+minio==7.2.10
+
+# --- Security ----------------------------------------------------------------
+argon2-cffi==23.1.0
+PyJWT==2.10.0
+cryptography==43.0.3
+Authlib==1.3.2
+itsdangerous==2.2.0
+
+# --- HTTP client -------------------------------------------------------------
+httpx==0.27.2
+
+# --- Observability -----------------------------------------------------------
+structlog==24.4.0
+prometheus-client==0.21.0
+
+# --- PDF structural safety ----------------------------------------------------
+# Shared, not worker-only: the API validates an upload before it is stored, so a
+# file carrying active content is refused at the door rather than written to
+# object storage and rejected asynchronously. The worker re-validates what it
+# reads back — the stored object is not assumed to be the file that was checked.
+pikepdf==9.4.2
+
+# --- Document generation ---------------------------------------------------------
+# PDF export renders in the API process — a few hundred rows takes milliseconds,
+# and writing the file to object storage first would put a plaintext copy of
+# someone's whole ledger at rest to save nothing.
+reportlab==4.2.5
+
+# --- AI provider ---------------------------------------------------------------
+# Shared rather than worker-only from P8 onward: categorisation runs in a
+# worker, but the assistant answers a request in the API process, so both
+# images need the client. It is imported lazily either way — with AI_ENABLED
+# false, nothing here is ever loaded.
+google-genai==0.3.0
+
+# --- Utilities ---------------------------------------------------------------
+python-dateutil==2.9.0.post0
+rapidfuzz==3.10.1
+tenacity==9.0.0

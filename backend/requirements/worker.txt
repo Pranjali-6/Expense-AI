@@ -1,0 +1,26 @@
+-r base.txt
+
+# =============================================================================
+# PDF extraction stack — deterministic first, OCR only as fallback.
+# An LLM is NEVER the primary extraction engine (see plan invariants).
+# =============================================================================
+
+# numpy pinned <2 for OpenCV/Camelot binary compatibility.
+numpy==1.26.4
+
+# Text layer + geometry
+PyMuPDF==1.24.13
+pdfplumber==0.11.4
+pypdfium2==4.30.0
+
+# Ruled-table fallback (requires ghostscript in the image)
+camelot-py==0.11.0
+opencv-python-headless==4.10.0.84
+
+# OCR fallback for scanned statements (requires tesseract + poppler)
+pytesseract==0.3.13
+pdf2image==1.17.0
+Pillow==11.0.0
+
+# Optional malware scanning (compose profile "security")
+clamd==1.0.2

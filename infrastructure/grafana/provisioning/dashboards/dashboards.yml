@@ -1,0 +1,17 @@
+# Dashboards are provisioned from files rather than clicked together in the UI.
+# A dashboard that exists only in Grafana's database disappears with the volume
+# and cannot be reviewed in a diff — which for the one screen an operator looks
+# at during an incident is the wrong trade.
+apiVersion: 1
+
+providers:
+  - name: expense-ai
+    orgId: 1
+    folder: Expense AI
+    type: file
+    disableDeletion: false
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

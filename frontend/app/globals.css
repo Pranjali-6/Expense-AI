@@ -1,0 +1,280 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ==========================================================================
+   Design tokens
+   --------------------------------------------------------------------------
+   Channel triplets rather than hex, so every token can be used with an alpha
+   channel: rgb(var(--primary) / 0.12).
+
+   A note on the emerald. #10B981 against white text is 2.56:1 — it fails WCAG
+   AA badly, which is why so many fintech UIs have unreadable green buttons.
+   We pair the emerald fill with deep-navy text instead (7.31:1), and use a
+   darker emerald for green *text* on light surfaces (5.25:1). Same brand
+   colour, legible in both roles.
+   ========================================================================== */
+
+:root {
+  /* Surfaces */
+  --background: 248 250 252;        /* #F8FAFC */
+  --surface: 255 255 255;           /* #FFFFFF */
+  --surface-raised: 255 255 255;
+  --surface-sunken: 241 245 249;    /* slate-100 */
+
+  /* Text */
+  --foreground: 11 18 32;           /* #0B1220 deep navy */
+  --foreground-muted: 100 116 139;  /* #64748B slate */
+  --foreground-subtle: 148 163 184;
+
+  /* Lines */
+  --border: 226 232 240;
+  --border-strong: 203 213 225;
+  --ring: 16 185 129;
+
+  /* Brand */
+  --primary: 16 185 129;            /* #10B981 emerald */
+  --primary-hover: 5 150 105;
+  --primary-foreground: 11 18 32;   /* navy on emerald — 7.31:1 */
+  --primary-text: 4 120 87;         /* emerald for text — 5.25:1 on #F8FAFC */
+  --primary-subtle: 209 250 229;
+
+  --accent: 20 184 166;             /* #14B8A6 teal */
+  --accent-text: 15 118 110;
+  --accent-subtle: 204 251 241;
+
+  /* Semantic */
+  --success: 16 185 129;
+  --success-text: 4 120 87;
+  --success-subtle: 209 250 229;
+
+  --warning: 245 158 11;            /* #F59E0B */
+  --warning-text: 180 83 9;
+  --warning-subtle: 254 243 199;
+
+  --error: 239 68 68;               /* #EF4444 */
+  --error-text: 185 28 28;
+  --error-subtle: 254 226 226;
+
+  --info: 59 130 246;               /* #3B82F6 */
+  --info-text: 29 78 216;
+  --info-subtle: 219 234 254;
+
+  /* Money semantics — debit leaves, credit arrives */
+  --debit: 185 28 28;
+  --credit: 4 120 87;
+
+  --radius: 0.625rem;
+}
+
+.dark {
+  --background: 11 18 32;           /* #0B1220 deep navy */
+  --surface: 17 24 39;              /* #111827 dark navy */
+  --surface-raised: 24 33 51;
+  --surface-sunken: 8 14 26;
+
+  --foreground: 248 250 252;
+  --foreground-muted: 148 163 184;
+  --foreground-subtle: 100 116 139;
+
+  --border: 34 45 66;
+  --border-strong: 51 65 85;
+  --ring: 16 185 129;
+
+  --primary: 16 185 129;
+  --primary-hover: 52 211 153;
+  --primary-foreground: 11 18 32;
+  --primary-text: 52 211 153;       /* lighter emerald reads on navy */
+  --primary-subtle: 6 59 46;
+
+  --accent: 20 184 166;
+  --accent-text: 45 212 191;
+  --accent-subtle: 6 56 53;
+
+  --success: 16 185 129;
+  --success-text: 52 211 153;
+  --success-subtle: 6 59 46;
+
+  --warning: 245 158 11;
+  --warning-text: 251 191 36;
+  --warning-subtle: 69 45 8;
+
+  --error: 239 68 68;
+  --error-text: 248 113 113;
+  --error-subtle: 69 17 17;
+
+  --info: 59 130 246;
+  --info-text: 96 165 250;
+  --info-subtle: 12 34 68;
+
+  --debit: 248 113 113;
+  --credit: 52 211 153;
+}
+
+@theme inline {
+  --color-background: rgb(var(--background));
+  --color-surface: rgb(var(--surface));
+  --color-surface-raised: rgb(var(--surface-raised));
+  --color-surface-sunken: rgb(var(--surface-sunken));
+
+  --color-foreground: rgb(var(--foreground));
+  --color-muted: rgb(var(--foreground-muted));
+  --color-subtle: rgb(var(--foreground-subtle));
+
+  --color-border: rgb(var(--border));
+  --color-border-strong: rgb(var(--border-strong));
+  --color-ring: rgb(var(--ring));
+
+  --color-primary: rgb(var(--primary));
+  --color-primary-hover: rgb(var(--primary-hover));
+  --color-primary-foreground: rgb(var(--primary-foreground));
+  --color-primary-text: rgb(var(--primary-text));
+  --color-primary-subtle: rgb(var(--primary-subtle));
+
+  --color-accent: rgb(var(--accent));
+  --color-accent-text: rgb(var(--accent-text));
+  --color-accent-subtle: rgb(var(--accent-subtle));
+
+  --color-success: rgb(var(--success));
+  --color-success-text: rgb(var(--success-text));
+  --color-success-subtle: rgb(var(--success-subtle));
+
+  --color-warning: rgb(var(--warning));
+  --color-warning-text: rgb(var(--warning-text));
+  --color-warning-subtle: rgb(var(--warning-subtle));
+
+  --color-error: rgb(var(--error));
+  --color-error-text: rgb(var(--error-text));
+  --color-error-subtle: rgb(var(--error-subtle));
+
+  --color-info: rgb(var(--info));
+  --color-info-text: rgb(var(--info-text));
+  --color-info-subtle: rgb(var(--info-subtle));
+
+  --color-debit: rgb(var(--debit));
+  --color-credit: rgb(var(--credit));
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas,
+    monospace;
+}
+
+@layer base {
+  * {
+    border-color: rgb(var(--border));
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: rgb(var(--background));
+    color: rgb(var(--foreground));
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Every figure in a ledger must align in its column. Lining, tabular
+     numerals are not decoration here — they are what makes a column of
+     rupee amounts scannable. */
+  .tnum,
+  table,
+  [data-slot="amount"] {
+    font-variant-numeric: tabular-nums lining-nums;
+    font-feature-settings: "tnum" 1, "lnum" 1;
+  }
+
+  :focus-visible {
+    outline: 2px solid rgb(var(--ring));
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+
+  ::selection {
+    background-color: rgb(var(--primary) / 0.25);
+  }
+
+  /* Scrollbars that don't fight the theme. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--border-strong)) transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: rgb(var(--border-strong));
+    border-radius: 9999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+}
+
+@layer utilities {
+  /* A restrained elevation scale. Financial surfaces should feel solid, not
+     floaty — one soft shadow, one hairline border. */
+  .elevation-1 {
+    box-shadow: 0 1px 2px 0 rgb(var(--foreground) / 0.04),
+      0 1px 3px 0 rgb(var(--foreground) / 0.06);
+  }
+
+  .elevation-2 {
+    box-shadow: 0 2px 4px -1px rgb(var(--foreground) / 0.05),
+      0 8px 16px -4px rgb(var(--foreground) / 0.08);
+  }
+
+  .dark .elevation-1 {
+    box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.3);
+  }
+
+  .dark .elevation-2 {
+    box-shadow: 0 4px 12px -2px rgb(0 0 0 / 0.4);
+  }
+
+  .skeleton-shimmer {
+    background-image: linear-gradient(
+      90deg,
+      rgb(var(--surface-sunken)) 0%,
+      rgb(var(--border)) 50%,
+      rgb(var(--surface-sunken)) 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.6s ease-in-out infinite;
+  }
+
+  @keyframes shimmer {
+    0% {
+      background-position: 200% 0;
+    }
+    100% {
+      background-position: -200% 0;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .skeleton-shimmer {
+      animation: none;
+    }
+
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}

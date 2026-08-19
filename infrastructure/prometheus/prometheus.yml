@@ -1,0 +1,60 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    service: expense-ai
+
+scrape_configs:
+  - job_name: expense-api
+    metrics_path: /api/v1/health/metrics
+    static_configs:
+      - targets: ["api:8000"]
+        labels:
+          component: api
+
+  # Workers are scraped directly rather than pushing. Each runs a small HTTP
+  # server on 9100 that reads its own multiprocess sample directory, so a
+  # counter incremented inside a forked child is visible here. worker-extract
+  # is the designated scale-out service, so it is resolved by DNS rather than
+  # by container name — Docker's embedded resolver returns every replica.
+  - job_name: expense-worker-default
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["worker-default:9100"]
+        labels:
+          component: worker
+          queue: default
+    # These three describe the *platform*, not a process: they are read from
+    # PostgreSQL by the API on a timer. Every process that imports the metrics
+    # module declares them, though, so a worker exports a confident 0 for each
+    # — three series on a dashboard where two are wrong. Dropped at the source
+    # rather than filtered in a panel, so the series is unambiguous everywhere.
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: expense_(ledger_transactions|review_queue_depth|untrusted_statements)
+        action: drop
+
+  - job_name: expense-worker-extract
+    metrics_path: /metrics
+    dns_sd_configs:
+      - names: ["worker-extract"]
+        type: A
+        port: 9100
+    relabel_configs:
+      - target_label: component
+        replacement: worker
+      - target_label: queue
+        replacement: extract
+    # These three describe the *platform*, not a process: they are read from
+    # PostgreSQL by the API on a timer. Every process that imports the metrics
+    # module declares them, though, so a worker exports a confident 0 for each
+    # — three series on a dashboard where two are wrong. Dropped at the source
+    # rather than filtered in a panel, so the series is unambiguous everywhere.
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: expense_(ledger_transactions|review_queue_depth|untrusted_statements)
+        action: drop
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

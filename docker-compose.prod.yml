@@ -1,0 +1,123 @@
+# =============================================================================
+# Production overlay.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Differences from the development stack:
+#   * no source bind mounts, no hot reload
+#   * frontend built as a standalone bundle, running non-root
+#   * datastore ports are not published to the host at all
+#   * resource limits and restart policies
+#   * secrets are expected from the environment or a secrets manager, not .env
+#
+# Before deploying, confirm in .env:
+#   ENVIRONMENT=production     disables /docs, /redoc and /openapi.json
+#   DEBUG=false
+#   COOKIE_SECURE=true         cookies stop working over plain HTTP
+#   CORS_ORIGINS               your real origin, never a wildcard
+#   SECRET_KEY, STORAGE_MASTER_KEK, and every password regenerated
+# =============================================================================
+
+services:
+  postgres:
+    ports: !override []
+    command:
+      - postgres
+      - -c
+      - max_connections=200
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - work_mem=16MB
+      - -c
+      - log_min_duration_statement=2000
+      # Statements are logged only when slow, and never with bound parameters.
+      - -c
+      - log_statement=none
+    deploy:
+      resources:
+        limits: { cpus: "2", memory: 2G }
+
+  redis:
+    ports: !override []
+    deploy:
+      resources:
+        limits: { cpus: "1", memory: 768M }
+
+  minio:
+    ports: !override []
+    deploy:
+      resources:
+        limits: { cpus: "1", memory: 1G }
+
+  api:
+    volumes: !override []
+    ports: !override []
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --app-dir
+      - /app/backend
+      - --workers
+      - "4"
+      - --proxy-headers
+      - --forwarded-allow-ips
+      - "*"
+      - --no-server-header
+    environment:
+      ENVIRONMENT: production
+      DEBUG: "false"
+      COOKIE_SECURE: "true"
+    deploy:
+      resources:
+        limits: { cpus: "2", memory: 1G }
+
+  worker-extract:
+    volumes: !override []
+    environment:
+      ENVIRONMENT: production
+      DEBUG: "false"
+    deploy:
+      # The heavy queue is the natural scale-out point: OCR and table parsing
+      # dominate wall-clock time on a large statement.
+      replicas: 2
+      resources:
+        limits: { cpus: "2", memory: 3G }
+
+  worker-default:
+    volumes: !override []
+    environment:
+      ENVIRONMENT: production
+      DEBUG: "false"
+    deploy:
+      resources:
+        limits: { cpus: "1", memory: 1G }
+
+  scheduler:
+    volumes: !override []
+    environment:
+      ENVIRONMENT: production
+      DEBUG: "false"
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 512M }
+
+  frontend:
+    build:
+      target: production
+    volumes: !override []
+    ports: !override []
+    environment:
+      NODE_ENV: production
+    deploy:
+      resources:
+        limits: { cpus: "1", memory: 768M }
+
+  nginx:
+    deploy:
+      resources:
+        limits: { cpus: "1", memory: 256M }

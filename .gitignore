@@ -1,0 +1,48 @@
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Real statement corpus — NEVER commit. See plan P4.5.
+tests/fixtures/real/
+# Demo statements are generated per install (`make demo-data`) and dated
+# relative to today, so a committed copy would be stale the following month.
+tests/fixtures/demo/
+demo-statements/
+*.pdf
+!tests/fixtures/statements/**/*.pdf
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# Node
+node_modules/
+.next/
+out/
+.turbo/
+*.tsbuildinfo
+.eslintcache
+
+# Build artifacts
+dist/
+build/
+.reports/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
