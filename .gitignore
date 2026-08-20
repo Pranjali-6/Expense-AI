@@ -13,6 +13,7 @@ tests/fixtures/demo/
 demo-statements/
 *.pdf
 !tests/fixtures/statements/**/*.pdf
+tests/fixtures/real
 
 # Python
 __pycache__/
@@ -48,3 +49,4 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 
+build-a-production-grade-multi-tenant-smooth-wand.md
