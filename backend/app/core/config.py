@@ -96,6 +96,20 @@ class Settings(BaseSettings):
     CLAMAV_PORT: int = 3310
 
     # ------------------------------------------------------------------ ocr --
+    # ------------------------------------------------- real-corpus (P4.5) --
+    # Testing-only. Passwords for the encrypted PDFs in tests/fixtures/real so
+    # the accuracy harness can open them, as `file.pdf:password` pairs separated
+    # by commas:
+    #
+    #     REAL_CORPUS_PASSWORDS=axis-2025.pdf:abcd01011990,hdfc-mar.pdf:xyz
+    #
+    # This is a stopgap for local validation, not the product's answer to
+    # locked statements — that is the upload/unlock flow, which takes the
+    # password per file over the API and never stores it. Here the password
+    # sits in plaintext in .env, so it is refused outside development and the
+    # file it decrypts is gitignored along with the rest of the real corpus.
+    REAL_CORPUS_PASSWORDS: str = ""
+
     OCR_ENABLED: bool = True
     OCR_LANGUAGES: str = "eng"
     OCR_DPI: int = 300
@@ -208,6 +222,26 @@ class Settings(BaseSettings):
     @property
     def max_upload_bytes(self) -> int:
         return self.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def real_corpus_passwords(self) -> dict[str, str]:
+        """Fixture filename -> password, for the P4.5 harness only.
+
+        Always empty in production: a plaintext password in the environment is
+        acceptable for reading files you already have on your own machine and
+        is not acceptable anywhere else. Split on the *first* colon so a
+        password may contain colons; a password containing a comma cannot be
+        expressed and needs the upload flow instead.
+        """
+        if self.is_production or not self.REAL_CORPUS_PASSWORDS.strip():
+            return {}
+        mapping: dict[str, str] = {}
+        for pair in self.REAL_CORPUS_PASSWORDS.split(","):
+            name, separator, password = pair.strip().partition(":")
+            if separator and name.strip() and password:
+                mapping[name.strip()] = password
+        return mapping
 
     @computed_field  # type: ignore[prop-decorator]
     @property

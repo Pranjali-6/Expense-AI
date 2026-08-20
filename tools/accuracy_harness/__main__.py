@@ -25,6 +25,7 @@ from pathlib import Path
 
 from app.models.enums import AccuracyCorpus, DocumentType
 
+from tools.corpus.fixtures import FixtureLocked, fixture_bytes
 from tools.accuracy_harness import targets as target_spec
 from tools.accuracy_harness.scoring import (
     GroundTruth,
@@ -77,7 +78,7 @@ def score_fixture(pdf_path: Path) -> Scorecard:
 
     truth = json.loads(expected_path(pdf_path).read_text())
 
-    outcome = parse_document(pdf_path.read_bytes())
+    outcome = parse_document(fixture_bytes(pdf_path))
     result = outcome.result
     metadata = truth["metadata"]
 
@@ -337,7 +338,14 @@ def main() -> int:
         print(_paint(f"\n  No fixtures in {directory}. Run `make gen-fixtures` first.\n", RED))
         return 1
 
-    cards = [score_fixture(path) for path in pdfs]
+    try:
+        cards = [score_fixture(path) for path in pdfs]
+    except FixtureLocked as exc:
+        # A locked fixture is a configuration gap, not a parser failure. Say so
+        # plainly rather than scoring the rest and reporting a total that
+        # quietly excludes it.
+        print(_paint(f"\n  {exc}\n", YELLOW))
+        return 1
     overall = aggregate(cards, fixture="TOTAL", bank_code=None)
     passed = print_report(cards, overall, args.corpus)
 

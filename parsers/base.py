@@ -175,11 +175,23 @@ class BankParser(ABC):
         a bare ``dd/mm/yyyy - dd/mm/yyyy`` range, and a ``Statement Period``
         label followed by either.
         """
+        # The separator alternation puts the words first and requires a bare
+        # dash to be surrounded by space. Without that, the `-` alternative
+        # matches the hyphen *inside* the first date — "From : 01-04-2025 To :
+        # 31-03-2026" splits at "01-04", leaves "2025  To" as the second date,
+        # and the whole period is lost on every statement that prints dashed
+        # dates, which is most of them.
+        separator = r"(?:\s+to\s+|\s+through\s+|\s*[-–—]\s+|\s+[-–—]\s*)"
         patterns = (
-            r"(?:from|period\s*(?:from)?)\s*[:\-]?\s*([0-9A-Za-z/\-. ]{6,20}?)\s*"
-            r"(?:to|-|–|through)\s*([0-9A-Za-z/\-. ]{6,20})",
-            r"statement\s+period\s*[:\-]?\s*([0-9A-Za-z/\-. ]{6,20}?)\s*"
-            r"(?:to|-|–)\s*([0-9A-Za-z/\-. ]{6,20})",
+            r"(?:from|period\s*(?:from)?)\s*[:\-]?\s*([0-9A-Za-z/\-. ]{6,20}?)"
+            + separator + r"[:\-]?\s*([0-9A-Za-z/\-. ]{6,20})",
+            r"statement\s+period\s*[:\-]?\s*([0-9A-Za-z/\-. ]{6,20}?)"
+            + separator + r"[:\-]?\s*([0-9A-Za-z/\-. ]{6,20})",
+            # A bare range with no label at all. Both sides must be
+            # date-shaped, so this cannot latch onto an amount range or a pair
+            # of reference numbers the way a looser pattern would.
+            r"(\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4})" + separator
+            + r"(\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4})",
         )
         for pattern in patterns:
             match = re.search(pattern, text, re.IGNORECASE)

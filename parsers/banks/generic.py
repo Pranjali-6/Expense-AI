@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
 
 from app.models.enums import Direction, DocumentType
@@ -109,6 +110,14 @@ _NON_TRANSACTION = re.compile(
 # tokenisation gap becomes a statement-wide failure. Capped at two spaces:
 # genuine column gaps in these layouts are far wider, so this cannot weld two
 # adjacent columns together.
+# A minus that genuinely marks a debit. The currency symbol is required, and
+# that is not fussiness: "02-04-2025" contains two hyphen-then-digit sequences,
+# so a looser pattern reports a sign convention on every statement that prints
+# dashed dates and would invert the direction of every unsigned row. Requiring
+# the symbol fails safe — an unsymbolled "-1,234.00" yields no inference rather
+# than a wrong one, and the running balance decides instead.
+_SIGNED_AMOUNT = re.compile(r"[-−]\s*(?:₹|Rs\.?|INR)\s*\d")
+
 _MONEY_TOKEN = re.compile(
     r"(?<![\d.])(\d{1,3}(?:[ ]{0,2},[ ]{0,2}\d{2,3})*(?:\.\d{1,2})?|\d+\.\d{1,2})"
     r"\s*(Dr|Cr|DR|CR)?(?![\d])"
@@ -265,41 +274,99 @@ class TabularBankParser(BankParser):
         transactions: list[CanonicalTransaction] = []
         unparsed = 0
         column_map: ColumnMap | None = None
+        mapped_width = 0
         year_hint = self.period_year(metadata)
+        unsigned = self._unsigned_direction(document)
+        # The most recent balance actually printed. Seeded from the opening
+        # balance so the very first row has something to be measured against,
+        # and only advanced when a row states one — a row with no balance
+        # should not erase the anchor for every row that follows it.
+        anchor = metadata.opening_balance
 
         for page in document.pages:
             for table in page.tables:
+                width = max((len(row) for row in table.rows), default=0)
                 page_map, start_index = self._locate_header(table)
                 if page_map is not None:
-                    column_map = page_map
+                    column_map, mapped_width = page_map, width
                 if column_map is None:
+                    continue
+
+                table_map = self._reanchor(column_map, width, mapped_width)
+                if table_map is None:
                     continue
 
                 for row_index in range(start_index, len(table.rows)):
                     row = table.rows[row_index]
                     parsed = self._row_to_transaction(
-                        row, column_map, page.page_number, row_index, year_hint,
-                        transactions[-1] if transactions else None,
+                        row, table_map, page.page_number, row_index, year_hint,
+                        anchor, unsigned, bool(transactions),
                     )
                     if parsed is _CONTINUATION:
-                        self._append_continuation(transactions, row, column_map)
+                        self._append_continuation(transactions, row, table_map)
                     elif parsed is _SKIP:
                         continue
                     elif parsed is None:
                         unparsed += 1
                     else:
                         transactions.append(parsed)
+                        if parsed.balance_after is not None:
+                            anchor = parsed.balance_after
 
         return transactions, unparsed
 
     @staticmethod
     def _locate_header(table: Table) -> tuple[ColumnMap | None, int]:
-        """Find the header row; return the mapping and the first data row index."""
-        for index, row in enumerate(table.rows[:4]):
+        """Find the header row; return the mapping and the first data row index.
+
+        The whole table is scanned, not just the top of it. Real statements put
+        a summary block — opening balance, totals, an interest line — above the
+        transaction grid, and table extraction folds that block into the same
+        table, so the header can sit a dozen rows down. A window of four rows
+        was enough for fixtures we authored and reads *nothing* on a statement
+        that opens with a summary: the mapping is never found, every row is
+        skipped for want of one, and the parser reports zero transactions on a
+        statement it can otherwise read perfectly.
+
+        Scanning further is safe because :func:`map_header_row` matches on
+        header *vocabulary* — a data row has to contain literal words like
+        "Narration" or "Withdrawal Amt." in the right columns to be mistaken
+        for a header, and the first match wins regardless.
+        """
+        for index, row in enumerate(table.rows):
             mapping = map_header_row(row)
             if mapping is not None:
                 return mapping, index + 1
         return None, 0
+
+    @staticmethod
+    def _reanchor(column_map: ColumnMap, width: int, mapped_width: int) -> ColumnMap | None:
+        """Fit a carried-forward mapping onto a table with a different width.
+
+        Continuation pages reprint no header, so the mapping has to carry. But
+        the *shape* can still change between pages: a date that extraction
+        splits into two cells on one page ("01 Feb '", "26") can split into
+        three on the next ("14", "Feb", "'26"), and the table gains a column.
+        Applying the old mapping unchanged reads the reference number as the
+        amount and the amount as the balance — confident, well-formed nonsense,
+        which is worse than reading nothing.
+
+        These layouts are anchored at both ends: the date starts the row and
+        the balance ends it. So the leading column keeps its index and
+        everything after it shifts by the width difference. When that does not
+        land inside the row, the mapping is abandoned rather than guessed.
+        """
+        if width == mapped_width:
+            return column_map
+        delta = width - mapped_width
+        leading = min(column_map.columns.values())
+        shifted = {
+            role: index if index == leading else index + delta
+            for role, index in column_map.columns.items()
+        }
+        if any(index < 0 or index >= width for index in shifted.values()):
+            return None
+        return ColumnMap(columns=shifted)
 
     def _row_to_transaction(
         self,
@@ -308,7 +375,9 @@ class TabularBankParser(BankParser):
         page_number: int,
         row_index: int,
         year_hint: int | None,
-        previous: CanonicalTransaction | None,
+        previous_balance: Decimal | None,
+        unsigned: Direction | None = None,
+        has_previous: bool = False,
     ):
         def cell(role: str) -> str:
             index = column_map.get(role)
@@ -328,16 +397,15 @@ class TabularBankParser(BankParser):
             # No date: either a wrapped continuation of the row above, or a
             # summary line. A continuation carries description text and no money.
             has_money = any(cell(role) for role in ("debit", "credit", "amount"))
-            if description and not has_money and previous is not None:
+            if description and not has_money and has_previous:
                 return _CONTINUATION
             return _SKIP
 
-        try:
-            txn_date = datenorm.parse_date(date_text, year_hint=year_hint)
-        except datenorm.DateParseError:
+        txn_date = self._read_date(row, column_map, date_text, year_hint)
+        if txn_date is None:
             return None
 
-        amount, direction = self._read_amounts(cell, previous)
+        amount, direction = self._read_amounts(cell, previous_balance, unsigned)
         if amount is None or direction is None:
             return None
 
@@ -370,7 +438,90 @@ class TabularBankParser(BankParser):
             field_confidence={"date": 1.0, "amount": 1.0, "direction": 1.0},
         )
 
-    def _read_amounts(self, cell, previous: CanonicalTransaction | None):
+    @staticmethod
+    def _read_date(
+        row: list[str],
+        column_map: ColumnMap,
+        date_text: str,
+        year_hint: int | None,
+    ) -> date | None:
+        """Parse the date, reassembling it when extraction split it up.
+
+        A borderless statement can have its date column cut into pieces that
+        land in separate cells — ``["01 Feb '", "26"]`` or ``["14", "Feb",
+        "'26"]``. The pieces always fall in the *unclaimed* columns between the
+        date and the next mapped role, so they can be gathered without risk of
+        swallowing a real column such as a value date.
+
+        Both joins are tried because both occur: the split can fall mid-token,
+        where the pieces butt together ("01 Feb '" + "26"), or between tokens,
+        where they need a space ("14" + "Feb" + "'26").
+
+        The reassembled forms are tried **before** the bare cell, which matters
+        more than it looks. A fragment like "14" is a perfectly parseable date
+        on its own — a bare day, for which the normaliser supplies the current
+        month and year. So trying the bare cell first does not fail over to the
+        join; it succeeds, silently, with a date months away from the real one,
+        and the running balance cannot catch it because the arithmetic is
+        still perfect. Whole-first ordering is what makes the fallback safe.
+        """
+        index = column_map.get("date")
+        candidates: list[str] = []
+
+        if index is not None:
+            claimed = set(column_map.columns.values())
+            fragments = [row[index]] if index < len(row) else []
+            position = (index or 0) + 1
+            while position < len(row) and position not in claimed:
+                fragments.append(row[position])
+                position += 1
+            parts = [part.strip() for part in fragments if part and part.strip()]
+            if len(parts) > 1:
+                candidates += ["".join(parts), " ".join(parts)]
+
+        candidates.append(date_text)
+
+        for candidate in candidates:
+            if not candidate:
+                continue
+            try:
+                return datenorm.parse_date(candidate, year_hint=year_hint)
+            except datenorm.DateParseError:
+                continue
+        return None
+
+    @staticmethod
+    def _unsigned_direction(document: ExtractedDocument) -> Direction | None:
+        """What an unsigned amount means, inferred from the statement itself.
+
+        Some statements print direction as a sign on one side only: debits
+        carry a minus and credits carry nothing. For those, an unsigned amount
+        is not ambiguous at all — it is the other direction — but the parser
+        cannot know that from one row.
+
+        So look at the document. If minus-signed amounts appear at all, the
+        statement is using a sign convention, and unsigned means the opposite.
+        If nothing is signed, this says nothing and the balance decides.
+
+        Deliberately the *last* resort in :meth:`_read_amounts`: an explicit
+        Dr/Cr marker, an explicit sign, and the running balance are all harder
+        evidence than a document-wide habit.
+        """
+        signed = 0
+        for page in document.pages:
+            signed += len(_SIGNED_AMOUNT.findall(page.text))
+            if signed >= 3:
+                # Three is enough to call it a convention rather than a stray
+                # hyphen in a narration.
+                return Direction.CREDIT
+        return None
+
+    def _read_amounts(
+        self,
+        cell,
+        previous_balance: Decimal | None,
+        unsigned: Direction | None = None,
+    ):
         """Resolve amount and direction from whichever columns this bank uses."""
         debit_text, credit_text = cell("debit"), cell("credit")
 
@@ -408,16 +559,24 @@ class TabularBankParser(BankParser):
         except AmountParseError:
             return None, None
 
+        # The running balance, anchored on the previous row — or, for the first
+        # row, on the statement's opening balance. Without that fallback the
+        # opening transaction of every single-amount-column statement is
+        # dropped for want of a predecessor, and its value silently becomes the
+        # derived opening balance instead.
         balance_text = cell("balance")
-        if balance_text and previous is not None and previous.balance_after is not None:
+        if balance_text and previous_balance is not None:
             try:
                 balance = parse_amount(balance_text)
             except AmountParseError:
                 balance = None
             if balance is not None:
-                delta = balance - previous.balance_after
+                delta = balance - previous_balance
                 if delta != 0:
                     return abs(value), Direction.DEBIT if delta < 0 else Direction.CREDIT
+
+        if unsigned is not None:
+            return abs(value), unsigned
 
         return None, None
 

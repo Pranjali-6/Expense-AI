@@ -1,0 +1,321 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Ground truth review</title>
+<style>
+  :root {
+    --bg: #12141a; --panel: #1a1d26; --line: #2c3040; --ink: #e6e8ef;
+    --dim: #8a91a6; --accent: #6ea8fe; --ok: #4ade80; --warn: #fbbf24; --bad: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 13px/1.45 ui-sans-serif, system-ui, sans-serif;
+         background: var(--bg); color: var(--ink); }
+  header { position: sticky; top: 0; z-index: 10; background: var(--panel);
+           border-bottom: 1px solid var(--line); padding: 10px 14px;
+           display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+  h1 { font-size: 14px; margin: 0; font-weight: 600; }
+  .grow { flex: 1; }
+  .muted { color: var(--dim); }
+  button { background: #262a36; color: var(--ink); border: 1px solid var(--line);
+           border-radius: 6px; padding: 5px 10px; cursor: pointer; font: inherit; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: #0b0d12; border-color: var(--accent);
+                   font-weight: 600; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  main { display: grid; grid-template-columns: minmax(320px, 42%) 1fr; gap: 0;
+         height: calc(100vh - 49px); }
+  #pane-pdf { overflow: auto; border-right: 1px solid var(--line); padding: 10px;
+              background: #0d0f14; }
+  #pane-pdf img { width: 100%; border-radius: 4px; background: #fff; }
+  #pane-rows { overflow: auto; padding: 10px; }
+  table { border-collapse: collapse; width: 100%; }
+  th { text-align: left; font-size: 10px; text-transform: uppercase;
+       letter-spacing: .06em; color: var(--dim); padding: 4px 5px;
+       position: sticky; top: 0; background: var(--bg); border-bottom: 1px solid var(--line); }
+  td { padding: 2px 3px; border-bottom: 1px solid #21242f; vertical-align: top; }
+  tr.confirmed { background: #16241a; }
+  tr.drift td { box-shadow: inset 2px 0 0 var(--warn); }
+  input, select { width: 100%; background: #0f1117; color: var(--ink);
+                  border: 1px solid #262a36; border-radius: 4px; padding: 3px 5px;
+                  font: inherit; }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  input.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .w-date { width: 104px; } .w-amt { width: 96px; } .w-dir { width: 74px; }
+  .w-bal { width: 106px; } .w-tiny { width: 42px; }
+  .chip { padding: 1px 7px; border-radius: 999px; font-size: 11px; border: 1px solid var(--line); }
+  .chip.ok { color: var(--ok); border-color: #235437; }
+  .chip.warn { color: var(--warn); border-color: #4d3d15; }
+  .chip.bad { color: var(--bad); border-color: #5a2626; }
+  fieldset { border: 1px solid var(--line); border-radius: 6px; margin: 0 0 10px;
+             padding: 8px 10px; }
+  legend { color: var(--dim); font-size: 11px; text-transform: uppercase;
+           letter-spacing: .06em; padding: 0 4px; }
+  .meta-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+               gap: 6px 10px; }
+  .meta-grid label { display: block; font-size: 10px; color: var(--dim);
+                     text-transform: uppercase; letter-spacing: .05em; }
+  #msg { padding: 7px 10px; border-radius: 6px; margin-bottom: 10px; display: none;
+         white-space: pre-wrap; }
+  #msg.show { display: block; }
+  #msg.err { background: #2a1618; border: 1px solid #5a2626; color: #fecaca; }
+  #msg.good { background: #14241a; border: 1px solid #235437; color: #bbf7d0; }
+  #msg.note { background: #221d10; border: 1px solid #4d3d15; color: #fde68a; }
+</style>
+
+<header>
+  <h1 id="title">Ground truth</h1>
+  <span class="muted" id="note"></span>
+  <span class="grow"></span>
+  <span id="progress" class="chip"></span>
+  <span id="recon" class="chip"></span>
+  <button id="confirm-page">Confirm page</button>
+  <button id="confirm-all">Confirm all</button>
+  <button id="download">Download</button>
+  <button id="save" class="primary">Save expected.json</button>
+</header>
+
+<main>
+  <div id="pane-pdf">
+    <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">
+      <button id="prev">&larr;</button>
+      <span id="pageno" class="muted"></span>
+      <button id="next">&rarr;</button>
+      <span class="grow"></span>
+      <label class="muted"><input type="checkbox" id="showall" style="width:auto"> all pages</label>
+    </div>
+    <img id="page-img" alt="statement page">
+  </div>
+
+  <div id="pane-rows">
+    <div id="msg"></div>
+
+    <fieldset>
+      <legend>Statement metadata</legend>
+      <div class="meta-grid" id="meta"></div>
+    </fieldset>
+
+    <div style="display:flex;gap:6px;margin-bottom:6px;align-items:center">
+      <button id="add">+ Add row</button>
+      <button id="sort">Sort by date</button>
+      <span class="muted" id="rowcount"></span>
+    </div>
+
+    <table>
+      <thead><tr>
+        <th class="w-tiny">ok</th><th class="w-date">date</th><th>description</th>
+        <th class="w-amt">amount</th><th class="w-dir">dir</th><th class="w-bal">balance</th>
+        <th>merchant</th><th>category</th><th class="w-tiny"></th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+</main>
+
+<script>
+const PROPOSAL = __PROPOSAL__;
+
+const META_FIELDS = [
+  "bank_code", "bank_name", "document_type", "account_last4",
+  "period_start", "period_end", "opening_balance", "closing_balance",
+  "declared_transaction_count", "total_amount_due", "minimum_amount_due",
+  "payment_due_date", "credit_limit",
+];
+
+let rows = PROPOSAL.rows.map(r => ({ ...r }));
+let meta = { ...PROPOSAL.metadata };
+let page = 0;
+let showAll = false;
+
+const $ = id => document.getElementById(id);
+const dec = v => { const n = Number(v); return Number.isFinite(n) ? n : NaN; };
+
+function blankRow() {
+  return {
+    confirmed: true, source_page: page, txn_date: "", value_date: null,
+    description: "", amount: "", direction: "debit", balance_after: null,
+    reference: null, merchant_normalized: null, merchant_slug: null,
+    payment_method: null, category_slug: null, subcategory_slug: null,
+  };
+}
+
+// The running-balance walk. This is the check that actually catches a mistyped
+// amount, so it runs on every keystroke rather than only at save time.
+function drifting() {
+  const bad = new Set();
+  const opening = dec(meta.opening_balance);
+  if (!Number.isFinite(opening)) return bad;
+  let running = opening;
+  rows.forEach((r, i) => {
+    const amt = dec(r.amount);
+    if (!Number.isFinite(amt)) return;
+    running += r.direction === "debit" ? -amt : amt;
+    const stated = dec(r.balance_after);
+    if (r.balance_after === null || r.balance_after === "" || !Number.isFinite(stated)) return;
+    if (Math.abs(stated - running) > 0.005) { bad.add(i); running = stated; }
+  });
+  return bad;
+}
+
+function renderMeta() {
+  $("meta").innerHTML = META_FIELDS.map(f => `
+    <div><label for="m-${f}">${f.replace(/_/g, " ")}</label>
+    <input id="m-${f}" data-meta="${f}" value="${meta[f] ?? ""}"></div>`).join("");
+  $("meta").querySelectorAll("input").forEach(input => {
+    input.addEventListener("input", e => {
+      const v = e.target.value.trim();
+      meta[e.target.dataset.meta] = v === "" ? null : v;
+      renderRows(); renderStatus();
+    });
+  });
+}
+
+function renderStatus() {
+  const done = rows.filter(r => r.confirmed).length;
+  const p = $("progress");
+  p.textContent = `${done} / ${rows.length} confirmed`;
+  p.className = "chip " + (rows.length && done === rows.length ? "ok" : "warn");
+
+  let debits = 0, credits = 0;
+  rows.forEach(r => {
+    const a = dec(r.amount); if (!Number.isFinite(a)) return;
+    if (r.direction === "debit") debits += a; else credits += a;
+  });
+  const opening = dec(meta.opening_balance), closing = dec(meta.closing_balance);
+  const card = meta.document_type === "credit_card_statement";
+  const el = $("recon");
+  if (!Number.isFinite(opening) || !Number.isFinite(closing)) {
+    el.textContent = `Dr ${debits.toFixed(2)} · Cr ${credits.toFixed(2)}`;
+    el.className = "chip";
+  } else {
+    const expected = card ? opening + debits - credits : opening - debits + credits;
+    const delta = expected - closing;
+    el.textContent = Math.abs(delta) < 0.005
+      ? `reconciles · Dr ${debits.toFixed(2)} · Cr ${credits.toFixed(2)}`
+      : `off by ${delta.toFixed(2)}`;
+    el.className = "chip " + (Math.abs(delta) < 0.005 ? "ok" : "bad");
+  }
+  $("rowcount").textContent = showAll
+    ? `${rows.length} rows`
+    : `${rows.filter(r => r.source_page === page).length} on this page · ${rows.length} total`;
+}
+
+function cell(i, field, cls = "", type = "text") {
+  const v = rows[i][field];
+  return `<input class="${cls}" type="${type}" data-i="${i}" data-f="${field}"
+           value="${v === null || v === undefined ? "" : String(v).replace(/"/g, "&quot;")}">`;
+}
+
+function renderRows() {
+  const drift = drifting();
+  const visible = rows
+    .map((r, i) => [r, i])
+    .filter(([r]) => showAll || r.source_page === page);
+
+  $("rows").innerHTML = visible.map(([r, i]) => `
+    <tr class="${r.confirmed ? "confirmed" : ""} ${drift.has(i) ? "drift" : ""}">
+      <td><input type="checkbox" data-i="${i}" data-f="confirmed" ${r.confirmed ? "checked" : ""}></td>
+      <td>${cell(i, "txn_date", "w-date")}</td>
+      <td>${cell(i, "description")}</td>
+      <td>${cell(i, "amount", "num w-amt")}</td>
+      <td><select data-i="${i}" data-f="direction">
+        <option value="debit" ${r.direction === "debit" ? "selected" : ""}>debit</option>
+        <option value="credit" ${r.direction === "credit" ? "selected" : ""}>credit</option>
+      </select></td>
+      <td>${cell(i, "balance_after", "num w-bal")}</td>
+      <td>${cell(i, "merchant_normalized")}</td>
+      <td>${cell(i, "category_slug")}</td>
+      <td><button data-del="${i}" title="delete row">×</button></td>
+    </tr>`).join("") || `<tr><td colspan="9" class="muted" style="padding:14px">
+      No rows on this page. Use “+ Add row” to enter them from the image.</td></tr>`;
+
+  $("rows").querySelectorAll("input, select").forEach(el => {
+    el.addEventListener(el.type === "checkbox" ? "change" : "input", e => {
+      const i = +e.target.dataset.i, f = e.target.dataset.f;
+      if (f === "confirmed") rows[i].confirmed = e.target.checked;
+      else { const v = e.target.value; rows[i][f] = v === "" ? null : v; }
+      if (f === "confirmed") { renderRows(); }
+      renderStatus();
+      if (f === "amount" || f === "direction" || f === "balance_after") {
+        const d = drifting();
+        $("rows").querySelectorAll("tr").forEach(tr => {
+          const idx = tr.querySelector("[data-i]")?.dataset.i;
+          if (idx !== undefined) tr.classList.toggle("drift", d.has(+idx));
+        });
+      }
+    });
+  });
+  $("rows").querySelectorAll("[data-del]").forEach(b => {
+    b.addEventListener("click", e => {
+      rows.splice(+e.target.dataset.del, 1); renderRows(); renderStatus();
+    });
+  });
+}
+
+function renderPage() {
+  $("page-img").src = PROPOSAL.page_images[page] || "";
+  $("pageno").textContent = `page ${page + 1} of ${PROPOSAL.page_count}`;
+  $("prev").disabled = page === 0;
+  $("next").disabled = page >= PROPOSAL.page_count - 1;
+}
+
+function message(text, kind) {
+  const el = $("msg");
+  el.textContent = text;
+  el.className = "show " + kind;
+}
+
+function payload() {
+  return { fixture: PROPOSAL.fixture, page_count: PROPOSAL.page_count, metadata: meta, rows };
+}
+
+$("prev").onclick = () => { page--; renderPage(); renderRows(); renderStatus(); };
+$("next").onclick = () => { page++; renderPage(); renderRows(); renderStatus(); };
+$("showall").onchange = e => { showAll = e.target.checked; renderRows(); renderStatus(); };
+$("confirm-page").onclick = () => {
+  rows.forEach(r => { if (showAll || r.source_page === page) r.confirmed = true; });
+  renderRows(); renderStatus();
+};
+$("confirm-all").onclick = () => {
+  rows.forEach(r => r.confirmed = true); renderRows(); renderStatus();
+};
+$("add").onclick = () => {
+  rows.push(blankRow()); showAll = false; $("showall").checked = false;
+  renderRows(); renderStatus();
+  const inputs = $("rows").querySelectorAll('input[data-f="txn_date"]');
+  inputs[inputs.length - 1]?.focus();
+};
+$("sort").onclick = () => {
+  rows.sort((a, b) => String(a.txn_date).localeCompare(String(b.txn_date)));
+  renderRows(); renderStatus();
+};
+$("download").onclick = () => {
+  const blob = new Blob([JSON.stringify(payload(), null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = PROPOSAL.fixture + ".review.json";
+  a.click();
+  message("Downloaded the raw review. Finish it with:\n"
+    + "  python -m tools.corpus.groundtruth adopt " + PROPOSAL.fixture + ".review.json", "note");
+};
+$("save").onclick = async () => {
+  $("save").disabled = true;
+  try {
+    const res = await fetch("/save", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload()),
+    });
+    const body = await res.json();
+    if (!res.ok) message(body.error || "Save failed.", "err");
+    else message("Wrote " + body.path
+      + (body.warnings?.length ? "\n\nWarnings:\n• " + body.warnings.join("\n• ") : ""),
+      body.warnings?.length ? "note" : "good");
+  } catch (err) {
+    message("Could not reach the builder: " + err
+      + "\nIf you opened this file directly, use Download instead.", "err");
+  } finally { $("save").disabled = false; }
+};
+
+$("title").textContent = PROPOSAL.fixture;
+$("note").textContent = PROPOSAL.parser_note
+  + (PROPOSAL.warnings.length ? "  ⚠ " + PROPOSAL.warnings.join(", ") : "");
+renderMeta(); renderPage(); renderRows(); renderStatus();
+</script>

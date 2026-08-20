@@ -151,6 +151,18 @@ accuracy: ## Score extraction against the synthetic golden fixtures (phase gate)
 validate-real: ## [P4.5] Score extraction against your own redacted statements
 	$(COMPOSE) exec worker-extract python -m tools.accuracy_harness --corpus real
 
+# Published on the host's loopback only. The review page embeds rendered images
+# of a real bank statement, so it must not be reachable from the network.
+GROUNDTRUTH_PORT ?= 8901
+
+.PHONY: groundtruth
+groundtruth: ## [P4.5] Review one real statement and write its expected.json (PDF=path)
+	@test -n "$(PDF)" || { \
+		echo "usage: make groundtruth PDF=tests/fixtures/real/axis-2025.pdf"; exit 2; }
+	$(COMPOSE) run --rm -p 127.0.0.1:$(GROUNDTRUTH_PORT):$(GROUNDTRUTH_PORT) \
+		-w /app worker-extract \
+		python -m tools.corpus.groundtruth review "$(PDF)" --port $(GROUNDTRUTH_PORT)
+
 # Run in worker-extract, not api: it is the only image carrying both the web
 # stack (from base.txt) and the PDF/OCR stack, so it is the one place the whole
 # suite can run. The api image deliberately has no PyMuPDF — an API container

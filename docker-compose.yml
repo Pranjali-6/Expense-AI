@@ -45,6 +45,7 @@ x-backend-env: &backend-env
   GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
   CLAMAV_ENABLED: ${CLAMAV_ENABLED:-false}
   OCR_ENABLED: ${OCR_ENABLED:-true}
+  REAL_CORPUS_PASSWORDS: ${REAL_CORPUS_PASSWORDS:-}
 
 x-logging: &default-logging
   driver: json-file
