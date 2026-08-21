@@ -2,7 +2,6 @@
 # Worker image — carries the full deterministic extraction toolchain.
 #
 #   tesseract-ocr   OCR fallback for scanned statements
-#   poppler-utils   pdf2image rasterisation
 #   ghostscript     Camelot ruled-table extraction
 #   libgl / libglib OpenCV runtime (deskew)
 #
@@ -25,7 +24,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libpq5 \
         tesseract-ocr \
         tesseract-ocr-eng \
-        poppler-utils \
         ghostscript \
         libgl1 \
         libglib2.0-0 \

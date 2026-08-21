@@ -17,9 +17,10 @@ pypdfium2==4.30.0
 camelot-py==0.11.0
 opencv-python-headless==4.10.0.84
 
-# OCR fallback for scanned statements (requires tesseract + poppler)
+# OCR fallback for scanned statements (requires tesseract). Pages are
+# rasterised with PyMuPDF, which is already here for the text layer, so no
+# separate poppler/pdf2image path is carried.
 pytesseract==0.3.13
-pdf2image==1.17.0
 Pillow==11.0.0
 
 # Optional malware scanning (compose profile "security")
